@@ -668,6 +668,7 @@ it("restores provider links and retires only that provider's visits after close 
       signal: new AbortController().signal,
       focus: "content" as const,
       forSession: () => navigation,
+      passThrough: () => () => {},
       resolve: () => true,
       complete: () => true,
     };

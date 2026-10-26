@@ -96,6 +96,8 @@ export function createNavigationController(
   // while one is attached.
   let presenters = 0;
   let ingressRetry: (() => Promise<OpenResult>) | undefined;
+  // Visits whose page currently reports nothing worth returning to.
+  const passing = new Map<string, () => boolean>();
   const listeners = new Set<() => void>();
   // Commit state and capture each caller's result before invoking external code.
   // Reentrant opens run against committed state and own their own result; deferred
@@ -365,7 +367,18 @@ export function createNavigationController(
             if (openingFocus) returningFocus = openingFocus;
             return active.promise;
           }
-          if (options?.replace || options?.dismiss) history.replace(target);
+          const state = history.snapshot();
+          // The next page takes a passing visit's place. Settings returns to
+          // that visit, and replacing under a forward stack would leave the
+          // stack behind the new page.
+          if (
+            options?.replace ||
+            options?.dismiss ||
+            (target.kind !== "settings" &&
+              !state.canGoForward &&
+              passing.get(state.current.id)?.())
+          )
+            history.replace(target);
           else {
             const { current, previous } = history.snapshot();
             if (
@@ -503,6 +516,15 @@ export function createNavigationController(
         return true;
       });
     },
+    /** While registered, the page presenting visit `entryId` reports through
+     * `passes` whether it holds anything to come back to. When it holds
+     * nothing, the next page opened from it replaces it in history. */
+    passThrough(entryId: string, passes: () => boolean) {
+      passing.set(entryId, passes);
+      return () => {
+        if (passing.get(entryId) === passes) passing.delete(entryId);
+      };
+    },
     /** Host-only traversal to a retained visit; does not retire dismissed content. */
     returnTo(entryId: string) {
       return transaction(() => !disposed && history.returnTo(entryId));
@@ -542,6 +564,7 @@ export function createNavigationController(
         const operation = active;
         effects.push(() => operation.controller.abort(NAVIGATION_ABORTED));
         listeners.clear();
+        passing.clear();
         history.dispose();
       });
     },
