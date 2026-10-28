@@ -7,6 +7,7 @@ import {
   useRef,
   useSyncExternalStore,
   type ComponentType,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
@@ -28,9 +29,16 @@ import { UnreadBadge, ordinaryUnread } from "./UnreadBadge";
 import { useWorkingAgents } from "./useWorkingAgents";
 import { WorkingAgentsBadge } from "./WorkingAgentsBadge";
 import styles from "./Channels.module.css";
+import { SidebarRowRenderer } from "../../features/channel-navigation/SidebarRowRenderer";
+import {
+  sidebarRow,
+  type RegisteredSidebarRows,
+} from "../../features/channel-navigation/sidebar-rows-service";
 import { avatarMedia } from "../../shared/avatar-source";
 
 type ItemProps = {
+  rowContributions?: readonly RegisteredSidebarRows[] | undefined;
+  onHiddenChange?: ((id: string, hidden: boolean) => void) | undefined;
   channel: ChannelSummary;
   profile?: Profile | undefined;
   session: RelaySession;
@@ -117,6 +125,8 @@ function useOrdinaryUnread(
 }
 
 function ChannelSidebarItemCore({
+  rowContributions,
+  onHiddenChange,
   channel,
   profile,
   session,
@@ -284,7 +294,21 @@ function ChannelSidebarItemCore({
       {...(onHideDm ? { onHideDm } : {})}
     />
   );
-  if (!menuEnabled) return row;
+  const rendered =
+    sectionKey && rowContributions ? (
+      <ContributedChannelRow
+        channel={channel}
+        sectionKey={sectionKey}
+        session={session}
+        entries={rowContributions}
+        onHiddenChange={onHiddenChange}
+      >
+        {row}
+      </ContributedChannelRow>
+    ) : (
+      row
+    );
+  if (!menuEnabled) return rendered;
   return (
     <ContextMenuRoot
       open={menuOpen}
@@ -300,7 +324,7 @@ function ChannelSidebarItemCore({
         }
       }}
     >
-      {row}
+      {rendered}
       <MenuPopup
         aria-label={`Actions for ${channel.name}`}
         anchor={menuOpen ? menuAnchor : undefined}
@@ -309,6 +333,49 @@ function ChannelSidebarItemCore({
         {menuContent ?? lastMenuContent.current}
       </MenuPopup>
     </ContextMenuRoot>
+  );
+}
+
+function ContributedChannelRow({
+  channel,
+  sectionKey,
+  session,
+  entries,
+  children,
+  onHiddenChange,
+}: {
+  channel: ChannelSummary;
+  sectionKey: string;
+  session: RelaySession;
+  entries: readonly RegisteredSidebarRows[];
+  children: ReactElement;
+  onHiddenChange?: ((id: string, hidden: boolean) => void) | undefined;
+}) {
+  const target = useMemo(
+    () => ({ kind: "channel" as const, channelId: channel.id }),
+    [channel.id],
+  );
+  const subscribe = useCallback(
+    (listener: () => void) => session.unread.subscribe(target, listener),
+    [session, target],
+  );
+  const snapshot = useCallback(
+    () => session.unread.snapshot(target),
+    [session, target],
+  );
+  const unread = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const row = useMemo(
+    () => sidebarRow(channel, sectionKey, unread),
+    [channel, sectionKey, unread],
+  );
+  return (
+    <SidebarRowRenderer
+      row={row}
+      entries={entries}
+      onHiddenChange={onHiddenChange}
+    >
+      {children}
+    </SidebarRowRenderer>
   );
 }
 
