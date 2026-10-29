@@ -273,6 +273,8 @@ export type MessageComposerProps = {
     disabled: boolean;
     /** Files upload before the conversation exists; submit sends them. */
     attachments?: boolean;
+    /** Hears each edit, whether or not saving it succeeded. */
+    onDraftChange?: ((draft: MentionDraft) => void) | undefined;
     submit: (draft: MentionDraft, attachments: AttachmentDraft) => void;
   };
 };
@@ -762,8 +764,10 @@ function Composer({
     valueRef.current = next;
     updateDraft(next);
     if (save && !editing.target) {
-      if (submission) writeView(scope, draftKey, next);
-      else {
+      if (submission) {
+        writeView(scope, draftKey, next);
+        submission.onDraftChange?.(next);
+      } else {
         dirty.current = true;
         if (!conflict && !accepted) persist(next);
       }

@@ -146,7 +146,12 @@ export function NewMessage({
   ): void;
   onStarted(channelId: string, messageId: string): void;
 }) {
-  usePassThroughUntilDrafted(visit, session, scope, draftKey);
+  const draftEdited = usePassThroughUntilDrafted(
+    visit,
+    session,
+    scope,
+    draftKey,
+  );
   const [recipients, setRecipients] = useState(() =>
     savedRecipients(scope, session.viewer),
   );
@@ -186,10 +191,11 @@ export function NewMessage({
   const retire = useCallback(() => {
     retiring.current = undefined;
     prepared.current = undefined;
+    draftEdited(undefined);
     setRecipients([]);
     setRestoredDraft(mentionDraft(""));
     setDraftRevision((revision) => revision + 1);
-  }, []);
+  }, [draftEdited]);
   useLayoutEffect(() => {
     const confirmed = pending && session.directMessages.delivery(pending.id);
     if (pending) {
@@ -482,6 +488,7 @@ export function NewMessage({
           submission={{
             draftKey,
             recoveredDraft: restoredDraft,
+            onDraftChange: draftEdited,
             locked,
             disabled:
               !ready ||

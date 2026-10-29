@@ -128,7 +128,7 @@ export function SoloDraft({
     () => (source ? readLinkedChat(scope, draftKey)?.link : undefined),
     [source, scope, draftKey],
   );
-  usePassThroughUntilDrafted(
+  const draftEdited = usePassThroughUntilDrafted(
     visit,
     session,
     scope,
@@ -337,6 +337,7 @@ export function SoloDraft({
       // next start from that source seeds its link again.
       writeView(scope, `${draftKey}:new-draft`, source ? null : "");
       writeView(scope, `${draftKey}:new-project`, null);
+      draftEdited(undefined);
       onStarted(channelId);
       // Only a start that made no chat ends here; the chat and its messages
       // are dropped (see channelWrites.start). Any other miss leaves the chat
@@ -395,6 +396,7 @@ export function SoloDraft({
           locked: busy,
           disabled: busy || !available,
           attachments: true,
+          onDraftChange: draftEdited,
           submit: (draft, files) => {
             void start(draft, files);
           },

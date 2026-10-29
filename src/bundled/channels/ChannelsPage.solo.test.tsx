@@ -534,6 +534,38 @@ it("keeps a new chat out of Back history until something is written in it", asyn
   expect(passes?.()).toBe(true);
 });
 
+it("keeps a written new chat in Back history when its draft cannot be saved", async () => {
+  const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
+  const draftStorageKey = `buzz-view.v1:${JSON.stringify([f.scope, "solo:new-draft"])}`;
+  const setItem = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (
+    this: Storage,
+    key: string,
+    value: string,
+  ) {
+    if (key === draftStorageKey)
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    setItem.call(this, key, value);
+  });
+  try {
+    f.mount();
+    const region = await screen.findByRole("region", { name: "New chat" });
+    const input = within(region).getByRole("textbox", {
+      name: "Message your agents",
+    });
+    await waitFor(() => expect(input).toHaveTextContent("@Scout"));
+    const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
+    expect(passes?.()).toBe(true);
+    const user = userEvent.setup();
+    await user.click(input);
+    await user.keyboard(" Unsaved but written");
+    expect(readView(f.scope, "solo:new-draft", null)).toBeNull();
+    expect(passes?.()).toBe(false);
+  } finally {
+    vi.mocked(Storage.prototype.setItem).mockRestore();
+  }
+});
+
 it("keeps a linked chat draft in Back history, since it holds its source chat", async () => {
   const linked = "22222222-2222-4222-8222-222222222222";
   const f = fixture({ target: (scope) => soloDraftTarget(scope, { linked }) });
