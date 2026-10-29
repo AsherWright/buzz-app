@@ -365,9 +365,16 @@ export function createNavigationController(
           opening = true;
           openingFocus = options?.focus;
           returningFocus = undefined;
+          // A passing visit leaves as a dismissal does: back to its opener when
+          // that is the page opening, else replaced by it. Settings returns to
+          // that visit, so it never replaces it. Any forward entries stay.
+          const dismiss =
+            options?.dismiss ||
+            (target.kind !== "settings" &&
+              passes(history.snapshot().current.id));
           const previous = history.snapshot().previous;
           if (
-            options?.dismiss &&
+            dismiss &&
             previous &&
             targetKey(previous.target) === targetKey(target) &&
             history.returnTo(previous.id)
@@ -375,15 +382,7 @@ export function createNavigationController(
             if (openingFocus) returningFocus = openingFocus;
             return active.promise;
           }
-          // The next page takes a passing visit's place; Settings returns to
-          // that visit, so it never replaces it. Any forward entries stay.
-          if (
-            options?.replace ||
-            options?.dismiss ||
-            (target.kind !== "settings" &&
-              passes(history.snapshot().current.id))
-          )
-            history.replace(target);
+          if (options?.replace || dismiss) history.replace(target);
           else {
             const { current, previous } = history.snapshot();
             if (

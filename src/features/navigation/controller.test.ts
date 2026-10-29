@@ -283,6 +283,18 @@ describe("navigation attempts over one history driver", () => {
       nav.back();
       expect(nav.snapshot().entry.target).toEqual(page);
     });
+    it("returns to its opener when that page opens again", () => {
+      const t = setup();
+      const nav = t.navigation;
+      void nav.open(page);
+      const opener = nav.snapshot().entry;
+      void nav.open(draft);
+      t.host.passThrough(nav.snapshot().entry.id, () => true);
+      void nav.open(page);
+      expect(nav.snapshot().entry).toBe(opener);
+      nav.back();
+      expect(nav.snapshot().entry.target).not.toEqual(page);
+    });
     it("stays a Back stop while it holds something", () => {
       const { navigation: nav } = onDraft(() => false);
       void nav.open(other);
