@@ -22,7 +22,7 @@ fn main() {
         println!("cargo:rustc-cfg=buzz_updater_enabled");
     }
     // tauri-build watches only the resource files present when it ran, so watch
-    // the directory too: goose-acp is staged after a first `cargo check`.
+    // the directory too: the ordinary goose-acp is staged after a first `cargo check`.
     println!("cargo:rerun-if-changed=resources/bin");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         build_resources::prepare_executables(
@@ -150,6 +150,9 @@ fn main() {
             "oauth_callback_wait",
             "oauth_callback_cancel",
             "app_agent_list",
+            "app_agent_set_protection",
+            "app_agent_protection_defaults",
+            "app_agent_set_protection_defaults",
             "app_agent_create",
             "app_agent_portable",
             "app_agent_port",
