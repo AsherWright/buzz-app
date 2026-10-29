@@ -742,6 +742,7 @@ it("opens the agent a link names, on Your agents", async () => {
     forSession: () => navigation,
     resolve: () => true,
     complete: () => true,
+    passThrough: () => () => {},
   };
   setup([agent("Ada", 1), agent("Bea", 2)], {
     page: { navigator, navigation },
