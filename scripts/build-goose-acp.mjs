@@ -44,8 +44,21 @@ console.log(
 const source = join(root, "target/goose-acp-src");
 mkdirSync(source, { recursive: true });
 run("git", ["init", "--quiet"]);
-run("git", ["fetch", "--quiet", "--depth", "1", pin.repository, pin.revision]);
-run("git", ["checkout", "--quiet", "--force", "--detach", "FETCH_HEAD"]);
+if (
+  spawnSync("git", ["cat-file", "-e", `${pin.revision}^{commit}`], {
+    cwd: source,
+    stdio: "ignore",
+  }).status !== 0
+)
+  run("git", [
+    "fetch",
+    "--quiet",
+    "--depth",
+    "1",
+    pin.repository,
+    pin.revision,
+  ]);
+run("git", ["checkout", "--quiet", "--force", "--detach", pin.revision]);
 run(
   "cargo",
   [
