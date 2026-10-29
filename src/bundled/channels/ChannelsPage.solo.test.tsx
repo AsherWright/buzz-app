@@ -566,10 +566,10 @@ it("keeps a written new chat in Back history when its draft cannot be saved", as
   }
 });
 
-it("forgets a default tag an earlier release saved as the new chat's draft", async () => {
+it("keeps a saved draft that only tags the default agent in Back history", async () => {
   const f = fixture({ target: (scope) => soloDraftTarget(scope, { agent }) });
-  // As earlier releases saved it: the editor's snapshot, never typed in.
-  writeView(f.scope, "solo:new-draft", {
+  // A tag the person typed, saved with its editor snapshot.
+  const typed = {
     text: "@Scout ",
     recipients: [{ pubkey: agent, name: "Scout", start: 0, end: 6 }],
     document: {
@@ -596,23 +596,18 @@ it("forgets a default tag an earlier release saved as the new chat's draft", asy
         ],
       },
     },
-  });
+  };
+  writeView(f.scope, "solo:new-draft", typed);
   f.mount();
   const region = await screen.findByRole("region", { name: "New chat" });
-  const input = within(region).getByRole("textbox", {
-    name: "Message your agents",
-  });
-  await waitFor(() => expect(input).toHaveTextContent("@Scout"));
-  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
   await waitFor(() =>
-    expect(readView(f.scope, "solo:new-draft", null)).toBeNull(),
+    expect(
+      within(region).getByRole("textbox", { name: "Message your agents" }),
+    ).toHaveTextContent("@Scout"),
   );
-  expect(passes?.()).toBe(true);
-  const user = userEvent.setup();
-  await user.click(input);
-  await user.keyboard(" Plan the week");
+  const passes = vi.mocked(f.navigation.passThrough).mock.lastCall?.[0];
   expect(passes?.()).toBe(false);
-  expect(readView(f.scope, "solo:new-draft", null)).not.toBeNull();
+  expect(readView(f.scope, "solo:new-draft", null)).toEqual(typed);
 });
 
 it("keeps a linked chat draft in Back history, since it holds its source chat", async () => {

@@ -93,7 +93,6 @@ import styles from "./Messages.module.css";
 import { messageViewKey } from "./view-key";
 import { isEmojiOnly, usesLargeEmojiPresentation } from "./emoji-size";
 import {
-  addressingOnly,
   legacyFollowupDraft,
   mentionDraft,
   type MentionDraft,
@@ -1388,28 +1387,6 @@ function Composer({
     automaticTag.current = JSON.stringify(valueRef.current);
     return true;
   };
-  // Earlier releases saved the default tag as the new chat's draft. Still
-  // untouched, it is this composer's prefill, not something the person wrote:
-  // forget it and keep showing it in memory, as the seed below does.
-  const newConversation = !!submission;
-  const seedPubkey = seedMention?.pubkey;
-  useEffect(() => {
-    if (!newConversation || !seedPubkey || automaticTag.current) return;
-    const saved = mentionDraft(readView<unknown>(scope, draftKey, ""));
-    const only = (draft: MentionDraft) =>
-      addressingOnly(draft) &&
-      draft.recipients.length === 1 &&
-      draft.recipients[0]?.pubkey === seedPubkey &&
-      draft.recipients[0].start === 0;
-    if (
-      !only(saved) ||
-      valueRef.current.text !== saved.text ||
-      !only(valueRef.current)
-    )
-      return;
-    writeView(scope, draftKey, null);
-    automaticTag.current = JSON.stringify(valueRef.current);
-  }, [newConversation, seedPubkey, scope, draftKey]);
   useEffect(() => {
     if (!presented) autoTagged.current = undefined;
     if (
