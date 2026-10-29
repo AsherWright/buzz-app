@@ -679,6 +679,20 @@ it("stays in Back history once a message is written, even if it cannot be saved"
   }
 });
 
+it("leaves Back history once its written message is sent", async () => {
+  const t = setup();
+  const passThrough = vi.fn<PageNavigation["passThrough"]>(() => () => {});
+  t.mount({ passThrough } as unknown as PageNavigation);
+  const passes = passThrough.mock.lastCall?.[0];
+  await t.user.click(await screen.findByRole("option", { name: "Person 1" }));
+  await t.user.type(screen.getByRole("textbox"), "Hello");
+  expect(passes?.()).toBe(false);
+  await t.user.click(send());
+  await waitFor(() => expect(t.onStarted).toHaveBeenCalledOnce());
+  // The sent message is spent; the conversation it started takes its place.
+  expect(passes?.()).toBe(true);
+});
+
 it("opens blank and focused, adds multiple recipients, deduplicates, and enforces eight", async () => {
   const t = setup();
   t.directMessages.people.mockResolvedValue({
