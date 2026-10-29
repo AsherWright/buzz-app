@@ -114,6 +114,7 @@ export type {
   Agents,
   AgentAddedTab,
   AgentType,
+  AgentPresentation,
   AgentSession,
   AgentSessions,
 } from "../features/agents/service";
@@ -133,3 +134,6 @@ export type {
   SoloCardProps,
   SoloDisclosureProps,
 } from "../features/channel-navigation/solo-navigation-contract";
+
+export type { RuntimeLink } from "../features/agents/exposed";
+export type { Json, Served, Topic, Command } from "../features/agents/link";

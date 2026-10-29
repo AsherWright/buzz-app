@@ -40,6 +40,12 @@ it("independently unloads panels without removing the page or shared data", asyn
     snapshot: () => ({ agents: [], running: [], interrupted: [] }),
     addTool: () => {},
     addAttentionSource: () => {},
+    share: () => {},
+    shared: () => ({
+      read: () => undefined,
+      watch: () => () => {},
+      call: async () => null,
+    }),
   });
   root.provide("communityReader", {
     subscribe: () => () => {},

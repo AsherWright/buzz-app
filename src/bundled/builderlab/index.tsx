@@ -17,7 +17,7 @@ import { startKnownCommunitiesSync } from "./known-communities/sync";
 import type { AgentProviderSnapshot } from "../../features/agents/service";
 import { Header, InlineHeader } from "../../shared/design-system/ui/Header";
 import { hostedAgentSettings } from "./service";
-import { applyApps } from "./apps";
+import { applyApps, applyAppTools } from "./apps";
 
 export const inject = [
   "host",
@@ -28,6 +28,11 @@ export const inject = [
   "browser",
   "knownCommunities",
 ];
+// The app tools run where agents do, with the sign-in the UI shares.
+export const agent: NonNullable<PluginModule["agent"]> = {
+  inject: ["agents", "host"],
+  apply: (ctx) => applyAppTools(ctx, ctx.agents.shared()),
+};
 export const apply: PluginModule["apply"] = (ctx) => {
   let unavailable = "";
   try {
@@ -44,7 +49,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     return browserCredential(ctx.host, signal);
   });
   ctx.effect(() => () => session.dispose());
-  applyApps(ctx, session);
+  ctx.agents.share(applyApps(ctx, session));
   const backupSession = () => {
     if (!nativeIdentityEnabled()) return;
     handoffBackupSession(
