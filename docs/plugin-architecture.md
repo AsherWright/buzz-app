@@ -291,6 +291,21 @@ active registered types appear there; plugin activation remains owned by
 Settings → Plugins → Manage plugins. Provider defaults are versioned device preferences, not
 agent-record migrations; blank per-agent values inherit them.
 
+Code that agents need while they run, such as an agent type's runtime, tools,
+wakes and Attention sources, belongs in the plugin's optional `agent` export:
+`export const agent = { inject, apply(ctx) }`, with its own `inject`. `apply`
+stays the plugin's UI. Both parts now start in the same page, under the same
+plugin identity; the plugin is active once both are, and fails if either does.
+This separation lets agents later run apart from the UI page.
+
+A harness plugin registers its type from its `agent` entry and presents it
+from `apply`: `ctx.agents.present(typeId, (exposed) => ({ icon, Peek, Create,
+CreateModel, tabs, provider: { DialogBody, DefaultControl } }))`. The type's
+readers see one type with both halves. `exposed` is the type's `expose`: the
+handles its UI reaches of the runtime. Each is JSON, a store (`snapshot` and
+`subscribe`) or a call returning a promise, so it can later cross to another
+page. Claude is the first harness split this way.
+
 A plugin, bundled or installed, can add a tab to the settings of every agent
 running on this device, whatever its type, with
 `ctx.agents.registerTab({ id, title, component })`. The component receives

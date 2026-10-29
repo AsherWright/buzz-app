@@ -37,7 +37,7 @@ it("independently unloads panels without removing the page or shared data", asyn
   // Channels adds agent teams; GitHub registers tools and an Attention source.
   root.provide("agents", {
     subscribe: () => () => {},
-    snapshot: () => undefined,
+    snapshot: () => ({ agents: [], running: [], interrupted: [] }),
     addTool: () => {},
     addAttentionSource: () => {},
   });
