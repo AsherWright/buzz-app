@@ -15,8 +15,8 @@ import {
  * results arrive: a row inserted above cannot redirect Enter. When the
  * highlighted row leaves, the highlight returns to the first row rather than
  * reviving the old one. Enter before any row arrives, while results are
- * pending, chooses the first row once they are not, unless an edit, an arrow
- * key, Escape, a pointer move or closing comes first. Enter on an action row
+ * pending, chooses the first row once they are not, unless an edit, a move
+ * of the highlight, Escape or closing comes first. Enter on an action row
  * waits the same way while no result row has arrived, unless the user
  * highlighted that row. The hook draws nothing; rows keep their own markup. */
 export function useSearchHighlight({
@@ -77,13 +77,16 @@ export function useSearchHighlight({
     if (first) onChoose(first);
   }, [waiting, first, pending, onChoose]);
   const rowId = (key: string) => `${id}-${key}`;
-  const select = (key: string) =>
+  /** Highlights a row for the user, which drops a waiting Enter. */
+  const select = (key: string, pointer = false) => {
+    setAwaiting(undefined);
     setSelection((previous) => ({
       query,
       key,
-      pointer: false,
-      moves: previous.moves + 1,
+      pointer,
+      moves: pointer ? previous.moves : previous.moves + 1,
     }));
+  };
   /** The row an arrow key moves the highlight to. */
   const step = (down: boolean) => {
     const index = keys.indexOf(active);
@@ -138,8 +141,7 @@ export function useSearchHighlight({
     /** Spread on the element that contains the rows. */
     listProps: {
       onPointerMove(event: PointerEvent) {
-        if (pointerMoved(event) && awaiting !== undefined)
-          setAwaiting(undefined);
+        pointer.current = { x: event.clientX, y: event.clientY };
       },
     },
     /** Spread on each row. */
@@ -148,13 +150,7 @@ export function useSearchHighlight({
       // Tab can focus a row. Enter then chooses that row, so highlight it
       // and announce it. The row is already in view, so do not scroll.
       onFocus() {
-        if (active !== key)
-          setSelection((previous) => ({
-            ...previous,
-            query,
-            key,
-            pointer: true,
-          }));
+        select(key, true);
       },
       // Up and Down on a focused row move the highlight, and focus with it,
       // so Enter still chooses the highlighted row.
@@ -182,12 +178,7 @@ export function useSearchHighlight({
           active !== key &&
           keys.includes(key)
         ) {
-          setSelection((previous) => ({
-            ...previous,
-            query,
-            key,
-            pointer: true,
-          }));
+          select(key, true);
           // While a row has focus, Enter activates that row, so focus must
           // follow the highlight. The row is under the pointer; do not scroll.
           if (document.activeElement?.id.startsWith(`${id}-`))
@@ -233,7 +224,7 @@ export function useSearchHighlight({
         onChoose(active);
         return true;
       }
-      if (arrow || event.key === "Escape") setAwaiting(undefined);
+      if (event.key === "Escape") setAwaiting(undefined);
       if (arrow && keys.length) {
         event.preventDefault();
         select(step(down));
