@@ -1,6 +1,5 @@
 import type {} from "../navigation/service";
 import { createLocalAgentActivity } from "./local-activity";
-import { bindKeepAwake } from "./keep-awake";
 import { applySynced, isSynced, resolveSynced } from "./agent-start";
 import {
   type CommunityConfig,
@@ -25,19 +24,13 @@ import type { Expected, SnapshotRead } from "./agent-config-artifacts";
 import type { revertTemplate, SettingsCheck } from "./agent-config-history";
 import type { RevertOutcome } from "./AgentConfigHistory";
 import { nativeRelayInfo } from "../relay/native";
-import {
-  createAgentHooks,
-  dispatchAgentHooks,
-  type AgentHook,
-  type AgentHookContext,
-} from "./hooks";
+import type { AgentHook, AgentHookContext } from "./hooks";
 import {
   AgentConfigStore,
   type SettingsSchema,
   type Subject,
 } from "./agent-config";
 import type { Mode, Synced } from "./agent-start";
-import { TIMEOUT_LIMIT_MS } from "./runner";
 // Agents: agents that are plugins from the start. A plugin registers an agent
 // type (its summary line, peek view, settings tabs and `run`); each agent made
 // from it has its own native-held key, an `agent-attention/v1` configuration the
@@ -71,7 +64,7 @@ import {
   removeRelayAgent,
 } from "./relay-removal";
 import { relayOrigin } from "../communities/destination";
-import type { Communities } from "../communities/service";
+import type { ClientSnapshot, Communities } from "../communities/service";
 import {
   prepareRemoteAgentAuthorization,
   type NipOaAuthorization,
@@ -115,22 +108,20 @@ import {
 } from "./native";
 import { agentKey, pubkeyOf, type AgentKey } from "./membership";
 import { EMPTY, type Member } from "./records";
-import { AgentsRunner, type RunnerStatus } from "./agents-runner";
-import { RunnerPlugins } from "./runner-plugins";
+import type { RunnerStatus } from "./agents-runner";
+import { AgentsRunnerService, checkType, defaults } from "./runner-service";
 export { teamPrompt } from "./team-prompt";
-import { managerSide, routed, runnerSide, type TypeInfo } from "./runner-link";
+import { managerSide, type TypeInfo } from "./runner-link";
 import type { RuntimeLink } from "./exposed";
-import type { Served } from "./link";
-import { PRESENTED, shownType } from "./shown-types";
+import type { LinkPort, Served } from "./link";
+import { shownType } from "./shown-types";
 
 type ManagerSide = ReturnType<typeof managerSide>;
-import { originOf } from "./connections";
-import { AgentPresence } from "./presence";
+import { originOf, retryFailed } from "./connections";
 import {
   readArchiveUnchecked,
   readTeams,
   readUnfinished,
-  setAttention,
   writeArchiveUnchecked,
   writeTeams,
   writeUnfinished,
@@ -1214,26 +1205,19 @@ declare module "@deepseek-ai/cordis" {
 /** Bounds one cleanup attempt, whose relay steps otherwise wait on the outbox. */
 const CLEANUP_TIMEOUT_MS = 60_000;
 const TIMER_TICK_MS = 5_000;
-/** How often a failed connection to an unselected community is tried again. */
+/** How often a failed config support check is tried again. */
 const RETRY_MS = 30_000;
-/** A new agent's settings: its type's defaults. */
-function defaults(pubkey: string, type: RegisteredAgentType) {
-  const { config, attention = {} } = type.defaults();
-  let record: AgentRecord = { pubkey, attention: {}, config };
-  for (const [slug, value] of Object.entries(attention))
-    record = setAttention(record, slug, value);
-  return record;
-}
 const message = (error: unknown) =>
   String(error instanceof Error ? error.message : error);
 export { fromOwner } from "./owner-attestation";
 
 /** What Agents needs of the communities: the viewer, the selected one, and
  * a connection to any joined one without selecting it. */
-export type AgentCommunities = Pick<
-  Communities,
-  "snapshot" | "subscribe" | "open"
->;
+export type AgentCommunities = Readonly<{
+  snapshot(): Readonly<Pick<ClientSnapshot, "viewer" | "selected">>;
+  subscribe: Communities["subscribe"];
+  open: Communities["open"];
+}>;
 type Binding = {
   scope: string;
   origin: string;
@@ -1251,8 +1235,6 @@ type Bound = {
   relay: RelayData;
   stop: () => void;
   binding?: Binding | undefined;
-  /** When its failed connection was last tried again. */
-  retried?: number;
 };
 /** A saved identity, which is the agent's membership in one community, with
  * that membership's key. */
@@ -1311,16 +1293,8 @@ const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
 
 export class AgentsService extends Service implements Agents {
-  private readonly hookContributions;
   registerHook(hook: AgentHook) {
-    const adapter = this.contributions
-      .snapshot()
-      .find((type) => type.key === hook.harness);
-    if (adapter && !adapter.hooks?.events.includes(hook.event))
-      throw new Error(
-        `Hook event ${hook.event} is not supported by ${hook.harness}`,
-      );
-    this.hookContributions.register(this.ctx, hook);
+    this.here().registerHook(this.ctx, hook);
   }
   dispatchHook(
     harness: string,
@@ -1329,19 +1303,16 @@ export class AgentsService extends Service implements Agents {
     context: AgentHookContext,
     options: { accepts(output: unknown): boolean; milliseconds: number },
   ) {
-    const owner = this.ctx.pluginOwner;
-    if (!owner || !harness.startsWith(`${owner.id}/`))
-      throw new Error(
-        "Plugins can dispatch hooks only for their own agent types",
-      );
-    return dispatchAgentHooks(
-      this.hookContributions.handlers(harness, event),
+    return this.here().dispatchHook(
+      this.ctx,
+      harness,
+      event,
       input,
       context,
-      options.accepts,
-      options.milliseconds,
+      options,
     );
   }
+  /** The hosted agent types; the Runner keeps those that run here. */
   private readonly contributions;
   private readonly tabContributions;
 
@@ -1381,12 +1352,9 @@ export class AgentsService extends Service implements Agents {
   private state: AgentsSnapshot;
   /** By origin, so each agent listens in its own community, selected or not. */
   private bound = new Map<string, Bound>();
-  /** Runs the agents, and owns the agent storage they keep. */
-  private readonly runner: AgentsRunner;
-  /** The tools and attention sources plugins add for agents: the Runner's. */
-  private readonly plugins: RunnerPlugins;
-  /** The Runner's side of the link between them. */
-  private readonly runnerLink: ReturnType<typeof runnerSide>;
+  /** Runs the agents, and owns the agent storage they keep, with what
+   * plugins' agent entries add for them, when it runs in this page. */
+  private readonly runner: AgentsRunnerService | undefined;
   /** The Manager's side: what it sends the Runner, and what the Runner
    * decided, as the link last sent it. */
   private readonly decided: ManagerSide;
@@ -1439,36 +1407,6 @@ export class AgentsService extends Service implements Agents {
   private shown = new Map<string, Agent>();
   /** Each bound community's config channels, while config sync is on. */
   private readonly communityConfigs = new Map<string, CommunityConfig>();
-  /** Says which agents this copy runs in each community. */
-  private readonly presence = new AgentPresence({
-    running: () => {
-      const online = new Map<string, Set<string>>();
-      for (const agent of this.state.running) {
-        const origin = originOf(agent.relay);
-        if (origin && this.bindingOf(agent) && this.decided.runs(agent.key))
-          online.set(
-            origin,
-            (online.get(origin) ?? new Set()).add(agent.pubkey),
-          );
-      }
-      return online;
-    },
-    communities: () =>
-      [...this.bound].map(
-        ([origin, entry]) => [origin, entry.binding] as const,
-      ),
-    // Each pubkey said online there is one membership's, the one there.
-    yielded: (origin, pubkey) => {
-      const key = this.identities.find(
-        (identity) =>
-          identity.pubkey === pubkey &&
-          !identity.deleted &&
-          originOf(identity.relay) === origin,
-      )?.key;
-      return !!key && this.decided.yielded(key);
-    },
-  });
-
   constructor(
     ctx: Context,
     private readonly communities: AgentCommunities,
@@ -1484,35 +1422,33 @@ export class AgentsService extends Service implements Agents {
     /** Which artifact types an agent has synced, from its config channel
      * binding. Unset, every agent starts `local`. */
     private readonly bindingFor?: (agent: Agent) => ConfigBinding,
+    /** The Manager's end of the link to the Runner in another page. Unset,
+     * the Runner runs in this page. */
+    runnerPort?: LinkPort,
   ) {
     super(ctx, "agents");
     this.contributions = createContributions<AgentType>(ctx);
-    this.hookContributions = createAgentHooks(ctx);
     this.tabContributions = createContributions<AgentAddedTab>(ctx);
     this.configStore = new AgentConfigStore(storage);
 
     this.presentations = createContributions<Presentation>(ctx);
     this.shares = createContributions<Share>(ctx);
-    this.runner = new AgentsRunner(storage, native, localActivity, decisions, {
-      changed: () => this.update(),
-      open: (origin) => this.communities.open(origin),
-      types: () => this.contributions.snapshot(),
-      defaults,
-      // What the Runner asks of the Manager crosses the link.
-      createAgent: (agent, input) => this.runnerLink.createAgent(agent, input),
-      updateAgent: (agent, input) => this.runnerLink.updateAgent(agent, input),
-      templates: (agent) => this.runnerLink.templates(agent),
-      publishType: (key, type, config) =>
-        this.runnerLink.publishType(key, type, config),
-      finished: (key) => this.runnerLink.finished(key),
-      navigation: ctx.navigation,
-    });
     // The Runner decides from the memberships the Manager sends over the
-    // link, and the screens show what it sends back. Only JSON crosses, as it
-    // will between pages.
-    const channel = new MessageChannel();
-    this.runnerLink = runnerSide(channel.port1, this.runner);
-    this.decided = managerSide(channel.port2, {
+    // link, and the screens show what it sends back. Only JSON crosses, in
+    // this page as between pages.
+    let port = runnerPort;
+    if (!port) {
+      const channel = new MessageChannel();
+      this.runner = new AgentsRunnerService(ctx, channel.port1, {
+        communities,
+        native,
+        storage,
+        localActivity,
+        decisions,
+      });
+      port = channel.port2;
+    }
+    this.decided = managerSide(port, {
       members: () => ({
         loaded: this.loaded,
         identities: this.identities,
@@ -1643,11 +1579,6 @@ export class AgentsService extends Service implements Agents {
           ?.served,
       subscribeShared: (listener) => this.shares.subscribe(listener),
     });
-    this.plugins = new RunnerPlugins(ctx, this.runner);
-    if (native)
-      ctx.effect(() =>
-        bindKeepAwake(this.runner.runners, (hold) => native.keepAwake(hold)),
-      );
     this.unfinished = Object.freeze(readUnfinished(storage));
     this.unarchiving = readArchiveUnchecked(storage);
     this.teamList = Object.freeze(readTeams(storage));
@@ -1668,17 +1599,12 @@ export class AgentsService extends Service implements Agents {
     });
     ctx.effect(() => {
       const stops = [
-        this.contributions.subscribe(() => {
-          this.hookContributions.validate(this.contributions.snapshot());
-          this.runner.typesChanged();
-          this.update();
-          this.notify();
-        }),
-        this.presentations.subscribe(() => {
-          this.runner.typesChanged();
-          this.update();
-          this.notify();
-        }),
+        ...[this.contributions, this.presentations].map((registry) =>
+          registry.subscribe(() => {
+            this.update();
+            this.notify();
+          }),
+        ),
         // A new state object, so views reading `addedTabs()` render again.
         this.tabContributions.subscribe(() => {
           this.state = Object.freeze({ ...this.state });
@@ -1700,7 +1626,6 @@ export class AgentsService extends Service implements Agents {
             this.updates = updates;
             this.notify();
           }
-          this.runner.communitiesChanged(viewer);
           this.watch();
           // Synced teams are the signed-in account's.
           if (viewer !== this.teamsFor) this.teamsChanged();
@@ -1712,24 +1637,14 @@ export class AgentsService extends Service implements Agents {
       this.watch();
       void this.refresh();
       this.updateClassifier();
-      // Wakes each runner, which starts any timer that is due.
-      const tick = setInterval(() => {
-        this.runner.runners.tick();
-        this.reconnect();
-        this.presence.announce();
-        this.runner.runners.catchUp(true);
-      }, TIMER_TICK_MS);
+      const tick = setInterval(() => this.reconnect(), TIMER_TICK_MS);
       return () => {
         clearInterval(tick);
         // A list still being read is stale: it must not reopen communities.
         this.listed++;
         for (const stop of stops) stop();
         for (const origin of [...this.bound.keys()]) this.unbind(origin);
-        // Nothing the link sends now may start runners again.
-        this.runnerLink.close();
         this.decided.close();
-        this.runner.clear();
-        this.presence.clear();
         // Clear what is shown without reconciling, which would make new runners.
         this.state = Object.freeze({
           ...this.state,
@@ -1743,48 +1658,11 @@ export class AgentsService extends Service implements Agents {
   }
 
   register<Config>(type: AgentType<Config>) {
-    if (
-      !/^[a-z0-9][a-z0-9._-]*$/.test(type.id ?? "") ||
-      !type.title ||
-      typeof type.defaults !== "function"
-    )
-      throw new Error("Agent types need an id, a title and defaults");
-    if (
-      type.timeoutMs !== undefined &&
-      !(
-        Number.isInteger(type.timeoutMs) &&
-        type.timeoutMs >= 1 &&
-        type.timeoutMs <= TIMEOUT_LIMIT_MS
-      )
-    )
-      throw new Error(
-        `Agent type timeoutMs must be a whole number from 1 to ${TIMEOUT_LIMIT_MS}`,
-      );
-    const { remote } = type;
-    if (
-      remote &&
-      (type.run ||
-        type.models ||
-        type.timeoutMs !== undefined ||
-        (["provision", "activate", "profile", "remove"] as const).some(
-          (step) => typeof remote[step] !== "function",
-        ))
-    )
-      throw new Error(
-        "A hosted agent type has provision, activate, profile and remove, and no run, models or timeoutMs",
-      );
-    // A type that runs here may run in another page than its UI.
-    const shown = remote
-      ? undefined
-      : (PRESENTED.find((field) => type[field] !== undefined) ??
-        (type.sessionControls?.scope && "sessionControls.scope") ??
-        (type.provider?.DialogBody && "provider.DialogBody") ??
-        (type.provider?.DefaultControl && "provider.DefaultControl"));
-    if (shown)
-      throw new Error(
-        `An agent type that runs here gives ${shown} from its plugin's present`,
-      );
-    this.contributions.register(this.ctx, type as unknown as AgentType);
+    const registered = type as unknown as AgentType;
+    checkType(registered);
+    // A type that runs here is the Runner's; the Manager keeps hosted ones.
+    if (registered.remote) this.contributions.register(this.ctx, registered);
+    else this.here().register(this.ctx, registered);
   }
   present<Config>(
     typeId: string,
@@ -1803,11 +1681,12 @@ export class AgentsService extends Service implements Agents {
     this.shares.register(this.ctx, { id: "shared", served });
   }
   shared() {
-    const plugin = this.ctx.pluginOwner?.id;
-    if (!plugin) throw new Error("Only a plugin reaches what its UI shares");
-    const reached = routed(this.runnerLink, "plugin", { plugin });
-    this.ctx.effect(() => () => reached.close());
-    return reached as RuntimeLink;
+    return this.here().shared(this.ctx);
+  }
+  /** The Runner, for what plugins' agent entries use; they run in its page. */
+  private here() {
+    if (!this.runner) throw new Error("Agent entries run in the agents page");
+    return this.runner;
   }
   /** Whether a plugin presents this type but the Runner has not sent it yet:
    * the plugin is on and the type is on its way over the link. */
@@ -1853,10 +1732,7 @@ export class AgentsService extends Service implements Agents {
         known.runtime?.close();
         this.presentedTypes.delete(info);
       }
-    const result = Object.freeze([
-      ...local,
-      ...registered.filter((type) => type.remote),
-    ]);
+    const result = Object.freeze([...local, ...registered]);
     this.merged = { infos, registered, shown, result };
     return result;
   };
@@ -1871,17 +1747,15 @@ export class AgentsService extends Service implements Agents {
   }
   addedTabs = () => this.tabContributions.snapshot();
   addTool(tool: AddedTool) {
-    this.plugins.addTool(this.ctx, tool);
+    this.here().addTool(this.ctx, tool);
   }
   addAttentionSource(source: import("./attention-sources").AttentionSource) {
-    this.plugins.addAttentionSource(this.ctx, source);
+    this.here().addAttentionSource(this.ctx, source);
   }
-  attentionProviders = () => this.plugins.attentionProviders();
-  tools = () => this.plugins.tools();
+  attentionProviders = () => this.here().attentionProviders();
+  tools = () => this.here().tools();
   wake(key: AgentKey, wake: AgentWake) {
-    const plugin = this.ctx.pluginOwner?.id;
-    if (!plugin) throw new Error("Only a plugin wakes an agent");
-    this.runner.wake(key, wake, { plugin });
+    this.here().wake(this.ctx, key, wake);
   }
   snapshot = () => this.state;
   subscribe = (listener: () => void) => {
@@ -1907,15 +1781,13 @@ export class AgentsService extends Service implements Agents {
   find = (pubkey: string) =>
     this.state.agents.find((agent) => agent.pubkey === pubkey);
   handle(key: AgentKey) {
-    const owner = this.ctx.pluginOwner;
-    return owner && this.runner.runners.handle(key, owner.id);
+    return this.here().handle(this.ctx, key);
   }
   note(key: AgentKey, channelId: string, text: string, root?: string) {
-    return this.runner.runners.note(key, channelId, text, root);
+    return this.here().note(key, channelId, text, root);
   }
-  relay = (key: AgentKey) => this.runner.relay(key);
-  core = (key: AgentKey, signal?: AbortSignal) =>
-    this.runner.coreMemory.core(key, signal);
+  relay = (key: AgentKey) => this.here().relay(key);
+  core = (key: AgentKey, signal?: AbortSignal) => this.here().core(key, signal);
 
   private localCache:
     | {
@@ -4164,14 +4036,7 @@ export class AgentsService extends Service implements Agents {
     const selected = originOf(this.communities.snapshot().selected ?? "");
     const now = Date.now();
     for (const [origin, entry] of this.bound)
-      if (
-        origin !== selected &&
-        entry.relay.snapshot().status === "error" &&
-        now - (entry.retried ?? 0) >= RETRY_MS
-      ) {
-        entry.retried = now;
-        entry.relay.retry();
-      }
+      if (origin !== selected) retryFailed(entry.relay, now);
     for (const [origin, { binding }] of this.bound)
       if (
         typeof binding?.support === "object" &&
@@ -4335,7 +4200,6 @@ export class AgentsService extends Service implements Agents {
     } else if (held !== this.held || types !== this.shownTypes) this.notify();
     this.held = held;
     this.shownTypes = types;
-    this.presence.announce();
     for (const [origin, config] of this.communityConfigs)
       void config.attach(
         running

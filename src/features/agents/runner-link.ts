@@ -496,6 +496,10 @@ export function runnerSide(
   };
   return Object.assign(side, asks);
 }
+
+/** How long the Manager waits for the Runner to decide before it goes on. */
+const DECIDED_MS = 10_000;
+
 /** The Manager's side: it sends the Runner the viewer's memberships, and
  * shows what the Runner decided and the records it keeps. An agent or record
  * keeps its identity until the Runner sends a change to it. */
@@ -719,10 +723,26 @@ export function managerSide(
       revision++;
       for (const listener of [...listeners]) listener();
     },
-    /** Settles once the Runner decided from the memberships sent so far. */
+    /** Settles once the Runner decided from the memberships sent so far,
+     * or after `DECIDED_MS` without an answer from a Runner page that is not
+     * up. */
     decided() {
       if (closed || state.revision >= revision) return Promise.resolve();
-      return new Promise<void>((resolve) => waits.add({ revision, resolve }));
+      return new Promise<void>((resolve) => {
+        const wait = {
+          revision,
+          resolve() {
+            clearTimeout(timer);
+            resolve();
+          },
+        };
+        const timer = setTimeout(() => {
+          waits.delete(wait);
+          console.warn("The agents page has not answered; going on without it");
+          resolve();
+        }, DECIDED_MS);
+        waits.add(wait);
+      });
     },
     /** The agents running here, in every community. */
     running: () => state.running,
