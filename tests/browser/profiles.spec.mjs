@@ -429,10 +429,9 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     await avatar.click();
     await expect(key).toHaveText(npubs.viewer);
     if (pointerVisit !== "stationary") await page.mouse.move(0, 0);
-    if (pointerVisit === "back") {
-      const rect = await avatar.boundingBox();
-      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-    }
+    // Profile pushes the avatar aside. Hover waits for it to settle, so the
+    // pointer rests on the pushed avatar, not where Escape puts it back.
+    if (pointerVisit === "back") await avatar.hover();
     await page.getByRole("region", { name: "Profile details" }).press("Escape");
     await expect(panel).toHaveCount(0);
     await expect(avatar).toBeFocused();
