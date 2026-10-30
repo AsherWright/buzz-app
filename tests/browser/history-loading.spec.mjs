@@ -376,12 +376,41 @@ test.describe("pages inside one second", () => {
         return seen;
       }, held.id);
       await expect.poll(() => seen.evaluate((s) => s.unmounted)).toBe(true);
-      // Bring it just below the viewport; idle overscan alone need not reach it.
+      // Use the old offset only to mount it; the drag's rows can measure and
+      // move it. Idle overscan alone need not reach it.
       await history(page).evaluate((e, top) => {
         e.scrollTop = top - e.clientHeight - 50;
       }, heldTop);
       await expect(row).toHaveCount(1);
       await settle(page);
+      // Wait for the mounted rows' sizes to reach Virtua before placing it
+      // from its current geometry. A pause between frames is not that boundary.
+      await expect
+        .poll(() =>
+          history(page).evaluate((e) => {
+            const items = Array.from(e.querySelector("ol").children);
+            return items.every((item, index) => {
+              const next = items[index + 1];
+              return (
+                !next ||
+                Math.abs(
+                  next.getBoundingClientRect().top -
+                    item.getBoundingClientRect().bottom,
+                ) < 1
+              );
+            });
+          }),
+        )
+        .toBe(true);
+      await history(page).evaluate((e, id) => {
+        const row = e.querySelector(`[data-message-id="${id}"]`);
+        e.scrollTop +=
+          row.getBoundingClientRect().top -
+          e.getBoundingClientRect().bottom -
+          50;
+      }, held.id);
+      await settle(page);
+      await expect(row).toHaveCount(1);
       // It remounts below the viewport, where the reader no longer reads.
       expect(
         await history(page).evaluate(
@@ -392,6 +421,9 @@ test.describe("pages inside one second", () => {
         ),
       ).toBe(true);
       const before = await anchor(page);
+      const measuredHeight = await history(page).evaluate(
+        (e) => e.scrollHeight,
+      );
       // The row above it finishes measuring taller (an image loading). Rows
       // below the reader grow away from them; nothing in view moves.
       await history(page).evaluate((e, id) => {
@@ -403,6 +435,9 @@ test.describe("pages inside one second", () => {
           .after(extra);
       }, held.id);
       await settle(page);
+      await expect
+        .poll(() => history(page).evaluate((e) => e.scrollHeight))
+        .toBeGreaterThan(measuredHeight);
       await expectAnchor(page, before);
     } finally {
       await page.mouse.up();
