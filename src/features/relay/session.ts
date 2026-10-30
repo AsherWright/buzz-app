@@ -946,9 +946,15 @@ export function createRelaySession(
     notify,
   });
   let sourceChannelList = channels.queries.list();
+  const activityState = () => ({
+    activityStatus: channelActivity.status(),
+    ...(channelActivity.transient()
+      ? { activityTransient: true as const }
+      : {}),
+  });
   let activityChannelList: ChannelList = Object.freeze({
     ...sourceChannelList,
-    activityStatus: channelActivity.status(),
+    ...activityState(),
   });
   let channelActivityRevision = channelActivity.revision();
   const projectedChannels = new WeakMap<ChannelSummary, ChannelSummary>();
@@ -980,7 +986,7 @@ export function createRelaySession(
       });
       activityChannelList = Object.freeze({
         ...snapshot,
-        activityStatus: channelActivity.status(),
+        ...activityState(),
         channels: projected.every(
           (channel, index) => channel === snapshot.channels[index],
         )
@@ -1952,6 +1958,15 @@ export function createRelaySession(
           sidebarPreferences.queries.subscribe,
           () => loadState(sidebarPreferences.queries.snapshot()),
           () => void sidebarPreferences.queries.refresh(),
+        ),
+        recoverable(
+          channelActivity.subscribe,
+          () =>
+            loadState({
+              status: channelActivity.status(),
+              ...(channelActivity.transient() ? { transient: true } : {}),
+            }),
+          () => refreshChannelActivity(),
         ),
         // Visibility owns its quiet retries and exhausts without `transient`,
         // so this source only reports `busy`; its retry is not reached.
